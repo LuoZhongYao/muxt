@@ -17,8 +17,8 @@ Instructions for Use
     muxt[d] [options]
 
 	options:
-	  -n <number>         : Number of logical serial ports
-  	  -p <serport>        : Serial port device to connect to [/dev/modem]
+      -n <number>         : Number of logical serial ports
+      -p <serport>        : Serial port device to connect to [/dev/modem]
       -f <framsize>       : Maximum frame size [32]
       -d <loglevel>       : Set loglevel:
                             ERROR     0x01
