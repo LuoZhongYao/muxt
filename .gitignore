@@ -1,3 +1,5 @@
+#
+#
 # Object files
 *.o
 
@@ -37,3 +39,4 @@ build/
 doc/
 .ycm_extra_conf.py*
 
+!CMakeLists.txt
