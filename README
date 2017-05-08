@@ -29,10 +29,6 @@ Instructions for Use
       -s <symlink-prefix> : Prefix for the symlinks of slave devices (e.g. /dev/mux)
       -h                  : Show this help message
 
-    
-    options:
-      -p <serport>      : S
-
   muxtd 是运行于需要被复用的平台上, 该程序运行后将会打开串口,并等待muxt
   的连接请求, 收到muxt的连接请求后,该程序会调用forkpty打开一个伪终端,并fork
   一个进程运行shell.
