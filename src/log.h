@@ -14,13 +14,13 @@
 
 extern int loglevel;
 #ifdef __QNX__
-FILE *logfile = NULL;
-# define LOG(level, fmt, ...) ({if(logfile == NULL) logfile = fopen("/var/dumper/muxtd.log", "w");fprintf(logfile, fmt, ##__VA_ARGS__);})
+//FILE *logfile = NULL;
+//# define LOG(level, fmt, ...) ({if(logfile == NULL) logfile = fopen("/var/dumper/muxtd.log", "w");fprintf(logfile, fmt, ##__VA_ARGS__);})
 //# define LOG(level, fmt, ...) syslog(level, fmt, ##__VA_ARGS__)
-//#define LOG(...)
+#define LOG(...)
 #else
-# define LOG(level, fmt, ...) printf(fmt, ##__VA_ARGS__)
-//# define LOG(level, fmt, ...) syslog(level, fmt, ##__VA_ARGS__)
+//# define LOG(level, fmt, ...) printf(fmt, ##__VA_ARGS__)
+# define LOG(level, fmt, ...) syslog(level, fmt, ##__VA_ARGS__)
 #endif
 
 #define LOGD(fmt,...) do {if(loglevel & LOGLEVEL_DEBUG) LOG(LOG_DEBUG, fmt, ##__VA_ARGS__);} while(0)

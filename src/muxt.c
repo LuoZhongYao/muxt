@@ -13,6 +13,7 @@
 #include <termios.h>
 #include <sys/time.h>
 #include <sys/ioctl.h>
+#include <sys/poll.h>
 #include <sys/socket.h>
 #include <string.h>
 #include <paths.h>
@@ -31,13 +32,12 @@
 
 #define ffs(n) __builtin_ffs(n)
 #define popcount(n) __builtin_popcount(n)
-#define CHNAME(n)   n ? "Logica" : "Control"
-#define CTRL_ACK(n) n ? "Response" : "Request"
+#define CTRL_ACK(n) n ? "response" : "request"
 
 #define MAX_CHANNELS        32
 #define MAX_BUFF            210
-#define HEARTBEAT_TIMEOUT   10
-#define HEARTBEAT_THRESHOLD 5
+#define HEARTBEAT_TIMEOUT   10000
+#define HEARTBEAT_THRESHOLD 5000
 
 enum {
     CHANNEL_STATUS_CLOSE,
@@ -57,10 +57,11 @@ enum {
     CONTROL_STATUS_ERROR,
 };
 
-struct logical_channel
+struct channel
 {
     uint8_t id;
     uint8_t status;
+    struct pollfd *pollfd;
     int fd;
 };
 
@@ -81,7 +82,7 @@ struct control
     uint8_t payload[0];
 };
 
-int loglevel = LOGLEVEL_ERROR | LOGLEVEL_WARNING | LOGLEVEL_INFO;
+int loglevel = LOGLEVEL_ERROR | LOGLEVEL_WARNING;
 
 static volatile int terminate  = 0;
 int heartbeat_timeout         = HEARTBEAT_TIMEOUT;
@@ -89,7 +90,7 @@ static char *serportdev        = "/dev/ttyS0";
 static int maxfd               = 0;
 static int baudrate            = 460800;
 static uint32_t channel_bitmap = -1;
-static struct logical_channel *phy_channel = NULL;
+static struct channel *phy_channel = NULL;
 
 #if defined(MUXT)
 static char *remote_server     = "/bin/muxtd -p /dev/ttyS0";
@@ -102,10 +103,11 @@ static char *local_shell       = "/bin/sh";
 #endif
 
 
-static struct logical_channel logical_channels[MAX_CHANNELS];
+static struct pollfd fds[MAX_CHANNELS] = {{0,0,0}};
+static struct channel channels[MAX_CHANNELS];
 static int open_pty(int idx);
 static void close_pty(int fd, int idx);
-static int frame_write(struct logical_channel *ch, const uint8_t *payload, uint8_t length);
+static int frame_write(struct channel *ch, const uint8_t *payload, uint8_t length);
 
 static uint16_t __calc_crc(uint8_t ch, uint16_t crc)
 {
@@ -278,9 +280,9 @@ static void close_pty(int fd, int idx)
     close(fd);
 }
 
-static struct logical_channel *alloc_logical_channel(int id)
+static struct channel *alloc_channel(int id)
 {
-    struct logical_channel *ch;
+    struct channel *ch;
     if(channel_bitmap == 0 || (id != -1 && (id >= MAX_CHANNELS || id < 0 || !((1 << id) & channel_bitmap)))) {
         errno = E2BIG;
         return NULL;
@@ -288,7 +290,7 @@ static struct logical_channel *alloc_logical_channel(int id)
 
     id = (id == -1) ? ffs(channel_bitmap) - 1 : id;
 
-    ch = logical_channels + id;
+    ch = channels + id;
     ch->id = id;
     ch->fd = id ? open_pty(id) : open_serialport(serportdev);
 
@@ -296,37 +298,42 @@ static struct logical_channel *alloc_logical_channel(int id)
         return NULL;
 
     ch->status = CHANNEL_STATUS_OPEN;
+    ch->pollfd = fds + id;
+    ch->pollfd->fd = ch->fd;
+    ch->pollfd->events = POLLIN;
     channel_bitmap &= ~(1 << id);
     return ch;
 }
 
-static struct logical_channel *get_logical_channel(int id)
+static struct channel *get_channel(int id)
 {
     if(!(1 << id & channel_bitmap))
-        return logical_channels + id;
+        return channels + id;
     return NULL;
 }
 
-static void free_logical_channel(struct logical_channel *ch, void *_unused __attribute__((unused)))
+static void free_channel(struct channel *ch, void *_unused __attribute__((unused)))
 {
     if(ch->id == 0)
         close(ch->fd);
     else
         close_pty(ch->fd, ch->id);
     ch->status = CHANNEL_STATUS_CLOSE;
+    ch->pollfd->fd = 0;
+    ch->pollfd->events = 0;
     channel_bitmap |= (1 << ch->id);
 }
 
-static void foreach_logical_channel(void (*fn)(struct logical_channel *ch, void *ctx), void *ctx)
+static void foreach_channel(void (*fn)(struct channel *ch, void *ctx), void *ctx)
 {
     for(int i = MAX_CHANNELS - 1;i >= 0;i--) {
         if(!(1 << i & channel_bitmap)) {
-            fn(logical_channels + i, ctx);
+            fn(channels + i, ctx);
         }
     }
 }
 
-static int logical_channel_putc(struct logical_channel *ch, uint8_t c)
+static int channel_putc(struct channel *ch, uint8_t c)
 {
     int ret = -1;
     if(ch != NULL) {
@@ -335,7 +342,7 @@ static int logical_channel_putc(struct logical_channel *ch, uint8_t c)
     return ret == 1 ? 0 : -1;
 }
 
-static int logical_channel_getc(struct logical_channel *ch, uint8_t *c)
+static int channel_getc(struct channel *ch, uint8_t *c)
 { 
     int ret = -1;
     if(ch != NULL) {
@@ -347,21 +354,21 @@ static int logical_channel_getc(struct logical_channel *ch, uint8_t *c)
 
 static int write_virtual_channel(uint8_t channel, uint8_t *buf, int n)
 {
-    struct logical_channel *ch;
-    if(NULL == (ch = get_logical_channel(channel)))
+    struct channel *ch;
+    if(NULL == (ch = get_channel(channel)))
         return -1;
     return write(ch->fd, buf, n);
 }
 
-static int write_control_channel(struct logical_channel *cch, struct control *ctrl)
+static int write_control_channel(struct channel *cch, struct control *ctrl)
 {
     return frame_write(cch, (uint8_t*)ctrl, sizeof(struct control));
 }
 
-static int control_channel(struct logical_channel *cch, struct control *ctrl)
+static int control_channel(struct channel *cch, struct control *ctrl)
 {
     uint8_t status = CONTROL_STATUS_ERROR;
-    struct logical_channel *ch;
+    struct channel *ch;
     switch(ctrl->cmd) {
 
     case CONTROL_HEART_BEAT: 
@@ -370,9 +377,9 @@ static int control_channel(struct logical_channel *cch, struct control *ctrl)
     break;
 
     case CONTROL_LOGICAL_CONNECT: {
-        LOGI("%s connect channel(%d): %d\n", CTRL_ACK(ctrl->ack), ctrl->channel, ctrl->status);
-        if((NULL != (ch = get_logical_channel(ctrl->channel))) ||
-           (NULL != (ch = alloc_logical_channel(ctrl->channel)))) {
+        LOGI("connect channel(%d) %s: status = %d\n", ctrl->channel, CTRL_ACK(ctrl->ack), ctrl->status);
+        if((NULL != (ch = get_channel(ctrl->channel))) ||
+           (NULL != (ch = alloc_channel(ctrl->channel)))) {
             if(!ctrl->ack || ctrl->status == CONTROL_STATUS_SUCCESS) {
                 ch->status = CHANNEL_STATUS_CONNECTED;
                 status = CONTROL_STATUS_SUCCESS;
@@ -389,8 +396,8 @@ static int control_channel(struct logical_channel *cch, struct control *ctrl)
     } break;
 
     case CONTROL_LOGICAL_DISCONNECT: {
-        LOGI("%s disconnect channel(%d): %d\n", CTRL_ACK(ctrl->ack), ctrl->channel, ctrl->status);
-        if(NULL != (ch = get_logical_channel(ctrl->channel))) {
+        LOGI("disconnect channel(%d) %s: status = %d\n", ctrl->channel, CTRL_ACK(ctrl->ack), ctrl->status);
+        if(NULL != (ch = get_channel(ctrl->channel))) {
             ch->status = CHANNEL_STATUS_DISCONNECTED;
             status = CONTROL_STATUS_SUCCESS;
         }
@@ -409,7 +416,7 @@ static int control_channel(struct logical_channel *cch, struct control *ctrl)
     return 0;
 }
 
-static int frame_process(struct logical_channel *ch, struct frame *frame)
+static int frame_process(struct channel *ch, struct frame *frame)
 {
     if(frame->channel == 0)
         return control_channel(ch, (struct control*)frame->payload);
@@ -417,7 +424,7 @@ static int frame_process(struct logical_channel *ch, struct frame *frame)
     return write_virtual_channel(frame->channel, frame->payload, frame->length);
 }
 
-static int frame_write(struct logical_channel *ch, const uint8_t *payload, uint8_t length)
+static int frame_write(struct channel *ch, const uint8_t *payload, uint8_t length)
 {
     uint16_t crc;
     struct frame *frame = (struct frame*)malloc(sizeof(struct frame) + length + 2);
@@ -428,7 +435,7 @@ static int frame_write(struct logical_channel *ch, const uint8_t *payload, uint8
     crc = calc_crc((uint8_t*)frame, sizeof(struct frame) + length);
     frame->payload[length] = crc & 0xff;
     frame->payload[length + 1] = (crc >> 8) & 0xff;
-    slip_send_packet((uint8_t*)frame, sizeof(struct frame) + length + 2, (int (*) (void*, uint8_t))logical_channel_putc, (void*)phy_channel);
+    slip_send_packet((uint8_t*)frame, sizeof(struct frame) + length + 2, (int (*) (void*, uint8_t))channel_putc, (void*)phy_channel);
     return length;
 }
 
@@ -438,7 +445,7 @@ static struct frame *frame_read(void)
 #define FRAME_MAX_SIZE (sizeof(struct frame) + MAX_BUFF + 2) /* crc 2 byte */
     struct frame *frame = (struct frame*)calloc(1, FRAME_MAX_SIZE);
 
-    if(0 > slip_read_packet((uint8_t*)frame, FRAME_MAX_SIZE, (int (*)(void *,uint8_t *))logical_channel_getc, (void*)phy_channel)) {
+    if(0 > slip_read_packet((uint8_t*)frame, FRAME_MAX_SIZE, (int (*)(void *,uint8_t *))channel_getc, (void*)phy_channel)) {
         LOGE("slip read packet: %s\n", strerror(errno));
         goto __err;
     }
@@ -456,38 +463,9 @@ __err:
     return NULL;
 }
 
-static void logical_channel_select_cb(struct logical_channel *ch, void *fds)
+static void channel_connect(struct channel *ch, struct channel *cch)
 {
-    fd_set *rfds = (fd_set*)fds;
-    if(FD_ISSET(ch->fd, rfds)) {
-        LOGD("channle(%d) data in\n", ch->id);
-        if(ch->id == 0) {
-            struct frame *frame;
-            if(NULL == (frame = frame_read())) {
-                return;
-            }
-            /* Any channel receives data to reset heartbeat */
-            heartbeat_timeout = HEARTBEAT_TIMEOUT;
-            frame_process(ch, frame);
-            free(frame);
-        } else {
-            uint8_t buf[MAX_BUFF];
-            int readn = read(ch->fd, buf, sizeof(buf));
-            /* If the slave is closed, reset the pseudo terminal */
-            /*
-            if(readn == 0) {
-                close_pty(ch->fd, ch->id);
-                ch->fd = open_pty(ch->id);
-            } else */if(readn > 0) {
-                frame_write(ch, buf, readn);
-            }
-        }
-    }
-}
-
-static void logical_channel_connect(struct logical_channel *ch, struct logical_channel *cch)
-{
-    LOGI("Connecting the logical channel(%d): status = %d\n", ch->id, ch->status);
+    LOGI("Request connect channel(%d): status = %d\n", ch->id, ch->status);
     if(ch->status != CHANNEL_STATUS_CONNECTED) {
         write_control_channel(cch, &(struct control){.ack = 0,
             .cmd = CONTROL_LOGICAL_CONNECT,
@@ -497,9 +475,9 @@ static void logical_channel_connect(struct logical_channel *ch, struct logical_c
     }
 }
 
-static void logical_channel_disconnect(struct logical_channel *ch, struct logical_channel *cch)
+static void channel_disconnect(struct channel *ch, struct channel *cch)
 {
-    LOGI("Disconnect the logical channel %d.\n", ch->id);
+    LOGI("Disconnect channel(%d): status = %d\n", ch->id, ch->status);
     write_control_channel(cch, &(struct control){.ack = 0,
         .cmd = CONTROL_LOGICAL_DISCONNECT,
         .channel = ch->id,
@@ -508,30 +486,50 @@ static void logical_channel_disconnect(struct logical_channel *ch, struct logica
     ch->status = CHANNEL_STATUS_DISCONNECTED;
 }
 
-static void logical_channel_fd_set(struct logical_channel *ch, void *fds)
+static int process_control_channel(struct channel *ch)
 {
-    fd_set *rfds = (fd_set*)fds;
-    if(ch->fd > maxfd)
-        maxfd = ch->fd;
-    FD_SET(ch->fd, rfds);
+    struct frame *frame;
+    LOGD("control: fd %d, %d\n", ch->fd, ch->pollfd->fd);
+    if(NULL == (frame = frame_read()))
+        return -1;
+    heartbeat_timeout = HEARTBEAT_TIMEOUT;
+    frame_process(ch, frame);
+    free(frame);
+    return 0;
 }
 
-static int logical_channel_select(time_t sec)
+static int process_virtual_channel(struct channel *ch)
 {
-    int sel;
-    fd_set rfds;
-    struct timeval timeout;
+    int readn;
+    uint8_t buf[MAX_BUFF];
+    LOGD("virtual: fd %d, %d\n", ch->fd, ch->pollfd->fd);
+    if(0 < (readn = read(ch->fd, buf, sizeof(buf))))
+        frame_write(ch, buf, readn);
+    return readn;
+}
 
-    FD_ZERO(&rfds);
-    foreach_logical_channel(logical_channel_fd_set, (void *)&rfds);
+static void process_channel_poll(int channel)
+{
+    struct channel *ch = get_channel(channel);
+    if(ch != NULL)
+        channel ? process_virtual_channel(ch) : process_control_channel(ch);
+}
 
-    timeout.tv_sec = sec;
-    timeout.tv_usec = 0;
-
-    if(0 < (sel = select(maxfd + 1, &rfds, NULL, NULL, &timeout))) {
-        foreach_logical_channel(logical_channel_select_cb, (void*)&rfds);
+static int channel_poll(time_t ms)
+{
+    int ps, w = 1;
+    if(0 < (ps = poll(fds, MAX_CHANNELS, ms))) {
+        for(int i = 0;i < MAX_CHANNELS;i++) {
+            if(fds[i].events & fds[i].revents) {
+                process_channel_poll(i);
+                w = 0;
+            }
+        }
+        if(w)
+            usleep(ms * 1000);
     }
-    return sel;
+
+    return ps;
 }
 
 
@@ -542,7 +540,7 @@ static void usage(char *_name)
     fprintf(stderr,"options:\n");
     fprintf(stderr,"  -p <serport>        : Serial port device to connect to [/dev/ttyS0]\n");
     fprintf(stderr,"  -b <baudrate>       : MUX mode baudrate (0,9600,19200, ...) [460800]\n");
-    fprintf(stderr,"  -d <loglevel>       : Set loglevel: [ERROR | WARNING | INFO]\n");
+    fprintf(stderr,"  -d <loglevel>       : Set loglevel: [ERROR | WARNING]\n");
     fprintf(stderr,"                          ERROR     0x01\n");
     fprintf(stderr,"                          WARNING   0x02\n");
     fprintf(stderr,"                          INFO      0x04\n");
@@ -616,15 +614,15 @@ int main(int argc, char *argv[])
     signal(SIGTERM, signal_handler);
 
     /* create phyical channel */
-    if(NULL == (phy_channel = alloc_logical_channel(0))) {
+    if(NULL == (phy_channel = alloc_channel(0))) {
         LOGE("Create phyical channle %s: %s\n", serportdev, strerror(errno));
         return -1;
     }
 
 #if defined(MUXT)
-//    daemon(0, 0);
+    daemon(0, 0);
     for(int i = 1;i <= numOfPorts;i++) {
-        if(NULL == alloc_logical_channel(i)) {
+        if(NULL == alloc_channel(i)) {
             LOGE("Create logical channle(%d): %s\n", i, strerror(errno));
         }
     }
@@ -643,21 +641,18 @@ int main(int argc, char *argv[])
             write(phy_channel->fd, remote_server, strlen(remote_server));
             write(phy_channel->fd, "\n", 1);
 #elif defined(MUXTD)
-            write_control_channel(phy_channel, &(struct control){.ack = 0,
-                .cmd = CONTROL_LOGICAL_CONNECT,
-                .channel = 0,
-                .status = CONTROL_STATUS_SUCCESS});
+            channel_connect(phy_channel, phy_channel);
 #endif
-            logical_channel_select(5);
+            channel_poll(5000);
         }
 
 #if defined(MUXT)
         /* connect all logical channel */
-        foreach_logical_channel((void (*)(struct logical_channel*, void *))logical_channel_connect, phy_channel);
+        foreach_channel((void (*)(struct channel*, void *))channel_connect, phy_channel);
 #endif
 
         while (!terminate && phy_channel->status == CHANNEL_STATUS_CONNECTED && heartbeat_timeout > 0) {
-            if(!logical_channel_select(1))
+            if(!channel_poll(100))
                 heartbeat_timeout--;
             if(heartbeat_timeout < HEARTBEAT_THRESHOLD)
                 write_control_channel(phy_channel, &(struct control){.ack = 0,
@@ -667,13 +662,13 @@ int main(int argc, char *argv[])
         }
 
         LOGI("Disconnect all channel: heartbeat_timeout = %d.\n", heartbeat_timeout);
-        foreach_logical_channel((void (*)(struct logical_channel*, void *))logical_channel_disconnect, phy_channel);
+        foreach_channel((void (*)(struct channel*, void *))channel_disconnect, phy_channel);
         LOGI("Leave multiplexing mode.\n");
     }
 
 __exit:
     LOGI("Release all channels.\n");
-    foreach_logical_channel(free_logical_channel, NULL);
+    foreach_channel(free_channel, NULL);
 
     LOGI("%s finished\n", programName);
     return 0;
