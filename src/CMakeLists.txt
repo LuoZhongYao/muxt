@@ -20,3 +20,4 @@ target_compile_definitions(muxt
     PRIVATE -DMUXT
     )
 
+install_targets(/bin muxtd muxt)

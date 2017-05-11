@@ -48,7 +48,8 @@ void slip_send_packet(uint8_t *p, int len, int (*put)(void *ctx, uint8_t c), voi
 	put(ctx, SLIP_END);
 }
 
-int slip_read_packet(uint8_t *p, int (*get)(void *ctx, uint8_t *c), void *ctx) {
+int slip_read_packet(uint8_t *p, const int len, int (*get)(void *ctx, uint8_t *c), void *ctx) 
+{
     uint8_t c;
     int received = 0;
 
@@ -93,9 +94,13 @@ int slip_read_packet(uint8_t *p, int (*get)(void *ctx, uint8_t *c), void *ctx) {
             case SLIP_ESC_ESC: c = SLIP_ESC; break;
             }
         default:
+            if(received >= len)
+                goto __err;
             p[received++] = c;
         break;
         }
     }
+
+__err:
     return -1;
 }

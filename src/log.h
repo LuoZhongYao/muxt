@@ -13,8 +13,16 @@
 #define LOGLEVEL_DEBUG      0x0008
 
 extern int loglevel;
-//#define LOG(level, fmt, ...) printf(fmt, ##__VA_ARGS__)
-#define LOG(level, fmt, ...) syslog(loglevel, fmt, ##__VA_ARGS__)
+#ifdef __QNX__
+FILE *logfile = NULL;
+# define LOG(level, fmt, ...) ({if(logfile == NULL) logfile = fopen("/var/dumper/muxtd.log", "w");fprintf(logfile, fmt, ##__VA_ARGS__);})
+//# define LOG(level, fmt, ...) syslog(level, fmt, ##__VA_ARGS__)
+//#define LOG(...)
+#else
+# define LOG(level, fmt, ...) printf(fmt, ##__VA_ARGS__)
+//# define LOG(level, fmt, ...) syslog(level, fmt, ##__VA_ARGS__)
+#endif
+
 #define LOGD(fmt,...) do {if(loglevel & LOGLEVEL_DEBUG) LOG(LOG_DEBUG, fmt, ##__VA_ARGS__);} while(0)
 #define LOGW(fmt,...) do {if(loglevel & LOGLEVEL_WARNING) LOG(LOG_WARN, fmt, ##__VA_ARGS__);} while(0)
 #define LOGE(fmt,...) do {if(loglevel & LOGLEVEL_ERROR) LOG(LOG_ERR, fmt, ##__VA_ARGS__);} while(0)
