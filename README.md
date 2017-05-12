@@ -20,48 +20,46 @@ muxt 是一个串口控制台复用程序, 通过复用一个串口实现终端�
 ```shell
 
 Usage: muxt [options]
-	options:
-		-p <serport>        : Serial port device to connect to [/dev/ttyS0]
-		-b <baudrate>       : MUX mode baudrate (0,9600,19200, ...) [460800]
-		-d <loglevel>       : Set loglevel: [ERROR | WARNING]
-                      ERROR     0x01
-                      WARNING   0x02
-                      INFO      0x04
-                      DEBUG     0x08
-		-n <number>         : Number of logical serial ports [1]
-		-s <symlink-prefix> : Prefix for the symlinks of slave devices (e.g. /dev/mux)
-		-C <server command> : Remote service start command [/bin/muxtd -p /dev/ttyS0]
-		-h                  : Show this help message
+options:
+	-p <serport>        : Serial port device to connect to [/dev/ttyS0]
+	-b <baudrate>       : MUX mode baudrate (0,9600,19200, ...) [460800]
+	-n <number>         : Number of logical serial ports [1]
+	-s <symlink-prefix> : Prefix for the symlinks of slave devices (e.g. /dev/mux)
+	-C <server command> : Remote service start command [/bin/muxtd -p /dev/ttyS0]
+	-h                  : Show this help message
+	-d <loglevel>       : Set loglevel: [ERROR | WARNING]
+                  ERROR     0x01
+                  WARNING   0x02
+                  INFO      0x04
+                  DEBUG     0x08
 
 Usage: muxtd [options]
-	options:
-  		-p <serport>        : Serial port device to connect to [/dev/ttyS0]
-  		-b <baudrate>       : MUX mode baudrate (0,9600,19200, ...) [460800]
-  		-d <loglevel>       : Set loglevel: [ERROR | WARNING]
-  		                        ERROR     0x01
-  		                        WARNING   0x02
-  		                        INFO      0x04
-  		                        DEBUG     0x08
-  		-s <shell>          : Login shell [/bin/sh]
-  		-h                  : Show this help message
+options:
+	-p <serport>        : Serial port device to connect to [/dev/ttyS0]
+	-b <baudrate>       : MUX mode baudrate (0,9600,19200, ...) [460800]
+	-s <shell>          : Login shell [/bin/sh]
+	-h                  : Show this help message
+	-d <loglevel>       : Set loglevel: [ERROR | WARNING]
+	                        ERROR     0x01
+	                        WARNING   0x02
+	                        INFO      0x04
+	                        DEBUG     0x08
 
 ```
 
 * -p <serport>          指定复用的串口,默认是 /dev/ttyS0
 * -b <baudrate>         串口波特率,默认波特率是 460800
+* -n <number>           创建的虚拟串口数量,范围是1-31(仅客户端)
+* -s <symlink-prefix>   虚拟串口前缀,例如 -s /dev/mux 将会生成 /dev/mux1 /dev/mux2等(仅客户端)
+* -s <shell>            虚拟串口调用的shell(仅服务端)
+* -C <server command>   远端运行的命令,该命令会直接发给串口,当串口是控制台时,将执行该命令(仅客户端)
 * -d <loglevel>         设置输出log等级,默认输出 出错,警告(0x01 | 0x02), 可用值有:
-
 ```
     ERROR     0x01    出错信息
     WARNING   0x02    警告信息
     INFO      0x04    常规信息
     DEDUG     0x08    调试信息
 ```
-
-* -n <number>           创建的虚拟串口数量,范围是1-31(仅客户端)
-* -s <symlink-prefix>   虚拟串口前缀,例如 -s /dev/mux 将会生成 /dev/mux1 /dev/mux2等(仅客户端)
-* -s <shell>            虚拟串口调用的shell(仅服务端)
-* -C <server command>   远端运行的命令,该命令会直接发给串口,当串口是控制台时,将执行该命令(仅客户端)
 
 
 首先将对应平台的 `muxtd` 拷贝到远程设备上,在本地执行 `muxt` ,并指定 `-C` 参数使远程设备运行
