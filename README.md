@@ -1,3 +1,5 @@
+[![Build Status](https://travis-ci.org/LuoZhongYao/muxt.svg?branch=master)](https://travis-ci.org/LuoZhongYao/muxt)
+
 Serial port multiplexing terminal program
 -----------------------------------------
 
@@ -48,13 +50,16 @@ Usage: muxtd [options]
 * -p <serport>          指定复用的串口,默认是 /dev/ttyS0
 * -b <baudrate>         串口波特率,默认波特率是 460800
 * -d <loglevel>         设置输出log等级,默认输出 出错,警告(0x01 | 0x02), 可用值有:
-    * ERROR     0x01    出错信息
-    * WARNING   0x02    警告信息
-    * INFO      0x04    常规信息
-    * DEDUG     0x08    调试信息
+
+```
+    ERROR     0x01    出错信息
+    WARNING   0x02    警告信息
+    INFO      0x04    常规信息
+    DEDUG     0x08    调试信息
+```
+
 * -n <number>           创建的虚拟串口数量,范围是1-31(仅客户端)
 * -s <symlink-prefix>   虚拟串口前缀,例如 -s /dev/mux 将会生成 /dev/mux1 /dev/mux2等(仅客户端)
-                        并然后跟本地muxt连接
 * -s <shell>            虚拟串口调用的shell(仅服务端)
 * -C <server command>   远端运行的命令,该命令会直接发给串口,当串口是控制台时,将执行该命令(仅客户端)
 
