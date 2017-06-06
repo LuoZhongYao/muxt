@@ -21,8 +21,8 @@ muxt 是一个串口控制台复用程序, 通过复用一个串口实现终端�
 
 Usage: muxt [options]
 options:
-	-p <serport>        : Serial port device to connect to [/dev/ttyS0]
-	-b <baudrate>       : MUX mode baudrate (0,9600,19200, ...) [460800]
+	-d <serport>        : Serial port device to connect to [/dev/ttyS0]
+	-r <baudrate>       : MUX mode baudrate (0,9600,19200, ...) [460800]
 	-n <number>         : Number of logical serial ports [1]
 	-s <symlink-prefix> : Prefix for the symlinks of slave devices (e.g. /dev/mux)
 	-C <server command> : Remote service start command [/bin/muxtd -p /dev/ttyS0]
@@ -35,9 +35,9 @@ options:
 
 Usage: muxtd [options]
 options:
-	-p <serport>        : Serial port device to connect to [/dev/ttyS0]
-	-b <baudrate>       : MUX mode baudrate (0,9600,19200, ...) [460800]
-	-s <shell>          : Login shell [/bin/sh]
+	-d <serport>        : Serial port device to connect to [/dev/ttyS0]
+	-r <baudrate>       : MUX mode baudrate (0,9600,19200, ...) [460800]
+	-s <symlink-prefix> : Prefix for the symlinks of slave devices (e.g. /dev/mux)
 	-h                  : Show this help message
 	-d <loglevel>       : Set loglevel: [ERROR | WARNING]
 	                        ERROR     0x01
@@ -47,8 +47,8 @@ options:
 
 ```
 
-* -p <serport>          指定复用的串口,默认是 /dev/ttyS0
-* -b <baudrate>         串口波特率,默认波特率是 460800
+* -d <serport>          指定复用的串口,默认是 /dev/ttyS0
+* -r <baudrate>         串口波特率,默认波特率是 460800
 * -n <number>           创建的虚拟串口数量,范围是1-31(仅客户端)
 * -s <symlink-prefix>   虚拟串口前缀,例如 -s /dev/mux 将会生成 /dev/mux1 /dev/mux2等(仅客户端)
 * -s <shell>            虚拟串口调用的shell(仅服务端)
@@ -71,7 +71,7 @@ options:
 ```shell
  
 # 通过串口ttyUSB0,使用115200的波特率,创建4个虚拟串口, 服务端使用/bin/muxtd,串口为ttyS0, shell 是 /bin/bash 
-$ muxt -p /dev/ttyUSB0 -b 115200 -n 4 -s ~/mux -C '/bin/muxtd -p /dev/ttyS0 -b 115200 -s /bin/bash'
+$ muxt -d /dev/ttyUSB0 -r 115200 -n 4 -s ~/mux -C '/bin/muxtd -d /dev/ttyS0 -r 115200 -s /bin/bash'
 # 新的终端里面用picocom 连接 ~/mux1, 也可使用tmux, screen等程序复用本地终端
 $ picocom ~/mux1
 # 新的终端里面用picocom 连接 ~/mux2

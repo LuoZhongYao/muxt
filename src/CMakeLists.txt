@@ -1,23 +1,27 @@
-add_executable(muxtd
-    slip.c
-    muxt.c
-    )
-
 if(NOT "${CMAKE_SYSTEM_NAME}" MATCHES "QNX")
-    target_link_libraries(muxtd util)
+    set(oslib util)
 endif()
 
-target_compile_definitions(muxtd
-    PRIVATE -DMUXTD
-    )
+add_definitions(-DLC_INCLUDE="lc-addrlabels.h" -D_DEFAULT_SOURCE -D_BSD_SOURCE)
 
 add_executable(muxt
+    ftq.c
     slip.c
-    muxt.c
+    serial.c
+    channel.c
     )
+add_executable(msz msz.c)
 
-target_compile_definitions(muxt
-    PRIVATE -DMUXT
+target_link_libraries(muxt ${oslib})
+target_compile_definitions(muxt PRIVATE -DMUXT)
+
+add_executable(muxtd
+    ftq.c
+    slip.c
+    serial.c
+    channel.c
     )
+target_link_libraries(muxtd ${oslib})
+target_compile_definitions(muxtd PRIVATE -DMUXTD)
 
-install_targets(/bin muxtd muxt)
+install_targets(/bin muxt muxtd msz)

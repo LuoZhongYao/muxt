@@ -6,6 +6,7 @@
 #define __LOG_H__
 
 #include <syslog.h>
+#include <stdio.h>
 
 #define LOGLEVEL_ERROR      0x0001
 #define LOGLEVEL_WARNING    0x0002
@@ -14,12 +15,13 @@
 
 extern int loglevel;
 #ifdef __QNX__
-//FILE *logfile = NULL;
-//# define LOG(level, fmt, ...) ({if(logfile == NULL) logfile = fopen("/var/dumper/muxtd.log", "w");fprintf(logfile, fmt, ##__VA_ARGS__);})
+extern FILE *logfile;
+# define LOG(level, fmt, ...) ({if(logfile == NULL) logfile = fopen("/var/dumper/muxtd.log", "w");fprintf(logfile, fmt, ##__VA_ARGS__);fflush(logfile);})
 //# define LOG(level, fmt, ...) syslog(level, fmt, ##__VA_ARGS__)
-#define LOG(...)
+//# define LOG(...)
+//# define LOG(level, fmt, ...)  do{printf(fmt, ##__VA_ARGS__); fflush(stdout);}while(0)
 #else
-//# define LOG(level, fmt, ...) printf(fmt, ##__VA_ARGS__)
+//# define LOG(level, fmt, ...)  do{printf(fmt, ##__VA_ARGS__); fflush(stdout);}while(0)
 # define LOG(level, fmt, ...) syslog(level, fmt, ##__VA_ARGS__)
 #endif
 
