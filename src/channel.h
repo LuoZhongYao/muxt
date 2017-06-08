@@ -39,7 +39,7 @@
 } while(0)
 
 struct chmgr;
-struct ftq;
+struct ftmgr;
 void mgr_print(struct chmgr *chmgr, const char *fmt, ...);
 
 struct progress
@@ -95,17 +95,19 @@ static inline void progress(struct progress *pr, unsigned long size, const char 
 
 enum 
 {
-    CTRL_MGR       = 0,
-    /* 1 - 30 */        /* logical channel */
-    /* 32 */            /* physical channel */
-    CTRL_BLK_SEQ0  = 33,     /* 64 - 96 blk seq */
-    CTRL_BLK_SEQ31 = 64,
-    CTRL_BLK_AEQ0  = 65,
-    CTRL_BLK_AEQ31 = 96,
+    CTRL_MGR        = 0x00, /* 0x00 management channel */
+    CTRL_LOGICAL0   = 0x01, /* 0x01 - 0x19 logical channel */
+    CTRL_LOGICAL30  = 0x1E,
+    CTRL_PHYSIAL    = 0x1F, /* 0x20  physical channel */
 
-    CTRL_BLK_COMP,
-    CTRL_FSTAT_REQ,         /* file stat */
-    CTRL_FSTAT_RSP,
+    CTRL_BLK_SEQ0  = 0x20,  /* 0x21 - 0x41 blk seq */
+    CTRL_BLK_SEQ31 = 0x3F,
+    CTRL_BLK_AEQ0  = 0x40,  /* 0x42 - 0x62 blk seq */
+    CTRL_BLK_AEQ31 = 0x5F,
+
+    CTRL_FSTAT_REQ = 0x80,         /* file stat */
+    CTRL_FSTAT_RSP = 0x81,
+    CTRL_BLK_COMP  = 0x82,
     CTRL_HEARTBEAT,
     CTRL_HEARTBEAT_ACK,
     CTRL_LOGICAL_MGR,
@@ -129,6 +131,7 @@ enum
 //struct bln
 //{
 //    uint8_t status;
+//    uint32_t offset;
 //};
 //
 //
@@ -152,7 +155,7 @@ struct chmgr
     int baudrate;
     int heartbeat;
     void *slip;
-    struct ftq *ftq;
+    struct ftmgr *ftmgr;
     const char *shell;
     const char *prefix;
     const char *server;

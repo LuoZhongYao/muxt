@@ -5,7 +5,7 @@ endif()
 add_definitions(-DLC_INCLUDE="lc-addrlabels.h" -D_DEFAULT_SOURCE -D_BSD_SOURCE)
 
 add_executable(muxt
-    ftq.c
+    ftmgr.c
     slip.c
     serial.c
     channel.c
@@ -16,7 +16,7 @@ target_link_libraries(muxt ${oslib})
 target_compile_definitions(muxt PRIVATE -DMUXT)
 
 add_executable(muxtd
-    ftq.c
+    ftmgr.c
     slip.c
     serial.c
     channel.c

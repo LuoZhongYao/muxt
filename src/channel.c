@@ -14,7 +14,7 @@
 
 #include "channel.h"
 #include "slip.h"
-#include "ftq.h"
+#include "ftmgr.h"
 #include "log.h"
 
 int loglevel = LOGLEVEL_ERROR | LOGLEVEL_WARNING;
@@ -60,7 +60,7 @@ static void chmgr_init(struct chmgr *chmgr)
     }
 
     chmgr->baudrate = 460800;
-    chmgr->ftq = NULL;
+    chmgr->ftmgr = NULL;
     chmgr->fd = -1;
     chmgr->server = "muxtd -s /tmp/mux";
     chmgr->prefix = "/tmp/mux";
@@ -111,31 +111,34 @@ static void handle_fstat_req(struct chmgr *chmgr, const uint8_t *buf, uint16_t l
 
 static void handle_fstat_rsp(struct chmgr *chmgr, uint8_t status)
 {
-    if(status != CTRL_STATUS_SUCCESS)
-        goto __err;
-    ftq_alloc_task_chain(chmgr->ftq);
-__err: ;
+    if(status == CTRL_STATUS_SUCCESS && chmgr->ftmgr)
+        ftmgr_fill(chmgr->ftmgr);
+    else if(chmgr->ftmgr != NULL)
+        free_ftmgr(&chmgr->ftmgr);
 }
 
 
 static void handle_blk_seq(struct chmgr *chmgr, uint8_t seq, const uint8_t *buf, uint16_t len)
 {
     uint32_t offset = STREAM_TO_U32(buf);
-    uint8_t status = CTRL_STATUS_FAILED;
+    uint8_t rsp[5] = {CTRL_STATUS_FAILED};
+    memcpy(rsp + 1, buf, 4);
     if(chmgr->fd >= 0) {
-        status = CTRL_STATUS_SUCCESS;
+        rsp[0] = CTRL_STATUS_SUCCESS;
         lseek(chmgr->fd, offset, SEEK_SET);
         write(chmgr->fd, buf + BLK_HDR_SIZE, len - BLK_HDR_SIZE);
     }
-    fm_write(chmgr, SEQ_TO_AEQ(seq), &status, 1);
+    fm_write(chmgr, SEQ_TO_AEQ(seq), rsp, 5);
 }
 
-static void handle_blk_aeq(struct chmgr *chmgr, uint8_t aeq, uint8_t status)
+static void handle_blk_aeq(struct chmgr *chmgr, uint8_t aeq, uint8_t status, const uint8_t offset[4])
 {
-    if(status == CTRL_STATUS_SUCCESS) {
-        ftq_rm(chmgr->ftq, aeq - CTRL_BLK_AEQ0);
-    } else {
-        ftq_reset(chmgr->ftq, aeq - CTRL_BLK_AEQ0);
+    if(status == CTRL_STATUS_SUCCESS && chmgr->ftmgr) {
+        if(0 == ftmgr_aeq_handle(chmgr->ftmgr, aeq - CTRL_BLK_AEQ0, offset)) {
+            free_ftmgr(&chmgr->ftmgr);
+            close_pty(chmgr->prefix, chmgr->fds[CTRL_MGR].fd, CTRL_MGR);
+            chmgr->fds[CTRL_MGR].fd = open_pty(chmgr->prefix, CTRL_MGR);
+        }
     }
 }
 
@@ -152,8 +155,8 @@ static int fstat_req(struct chmgr *chmgr, const char *lname, const char *rname)
     uint32_t mode;
     const uint8_t nalen = strlen(rname) + 1;
     uint8_t *fs = NULL;
-    chmgr->ftq = alloc_ftq(lname, chmgr, &mode);
-    if(chmgr->ftq == NULL)
+    chmgr->ftmgr = alloc_ftmgr(lname, chmgr, &mode);
+    if(chmgr->ftmgr == NULL)
         goto __exit;
 
     fs = (uint8_t *)malloc(FSTAT_HDR_SIZE + nalen);
@@ -190,22 +193,26 @@ static void handle_heartbeat(struct chmgr *chmgr)
 
 static void chmgr_handler(struct chmgr *chmgr, uint8_t fn, uint16_t len, const uint8_t *buf)
 {
+    //if(fn != CTRL_HEARTBEAT && fn != CTRL_HEARTBEAT_ACK)
+    //    LOGD("%s: %02x\n", __func__, fn);
     switch(fn) {
-    case 1 ... 30           : handle_logical_mgr(chmgr, fn, buf, len); break;
+    case CTRL_HEARTBEAT_ACK: break;
+    case CTRL_HEARTBEAT     : handle_heartbeat(chmgr); break;
+
     case CTRL_FSTAT_REQ     : handle_fstat_req(chmgr, buf, len); break;
     case CTRL_FSTAT_RSP     : handle_fstat_rsp(chmgr, buf[0]); break;
     case CTRL_BLK_COMP      : handle_blk_comp(chmgr); break;
+
+    case CTRL_LOGICAL0 ... CTRL_LOGICAL30: handle_logical_mgr(chmgr, fn, buf, len); break;
     case CTRL_BLK_SEQ0 ... CTRL_BLK_SEQ31: handle_blk_seq(chmgr, fn, buf, len);break;
-    case CTRL_BLK_AEQ0 ... CTRL_BLK_AEQ31: handle_blk_aeq(chmgr, fn, buf[0]);break;
-    case CTRL_HEARTBEAT     : handle_heartbeat(chmgr); break;
-    case CTRL_HEARTBEAT_ACK: break;
+    case CTRL_BLK_AEQ0 ... CTRL_BLK_AEQ31: handle_blk_aeq(chmgr, fn, buf[0], buf + 1);break;
     }
 }
 
 static int chmgr_putc(struct chmgr *chmgr, uint8_t c)
 {
     //LOGD("\e[32m%02x\e[0m ", c);
-    return write(chmgr->fds[31].fd, &c, 1);
+    return write(chmgr->fds[CTRL_PHYSIAL].fd, &c, 1);
 }
 
 int fm_write(struct chmgr *chmgr, uint8_t fn, const void *payload, uint16_t len)
@@ -218,7 +225,6 @@ int fm_write(struct chmgr *chmgr, uint8_t fn, const void *payload, uint16_t len)
     memcpy(fm + 3, payload, len);
     crc = calc_crc(fm, FM_HDR_SIZE + len);
     U16_TO_STREAM(fm + FM_HDR_SIZE + len, crc);
-    //slip_send_packet(fm, FM_HDR_SIZE + len + 2, (int (*) (void*, uint8_t))chmgr_putc, (void*)chmgr);
     slip_encode(chmgr->slip, fm, FM_HDR_SIZE + len + 2);
     return len;
 }
@@ -250,7 +256,7 @@ static int fm_handler(struct chmgr *chmgr, const uint8_t *fm, uint16_t size)
 static int phys_read(struct chmgr *chmgr, int idx __unused)
 {
     uint8_t buf[16];
-    int rn = read(chmgr->fds[31].fd, buf, 16);
+    int rn = read(chmgr->fds[CTRL_PHYSIAL].fd, buf, 16);
     return slip_decode(chmgr->slip, buf, rn);
 }
 
@@ -261,7 +267,7 @@ void mgr_print(struct chmgr *chmgr, const char *fmt, ...)
     va_list ap;
     va_start(ap, fmt);
     n = vsnprintf(buf, 1024, fmt, ap);
-    write(chmgr->fds[0].fd, buf, n);
+    write(chmgr->fds[CTRL_MGR].fd, buf, n);
     va_end(ap);
 }
 
@@ -271,7 +277,7 @@ static int mgr_process(struct chmgr *chmgr, int idx __unused)
     char buf[1024];
     char *lname, *rname;
 
-    if(0 < (ret = read(chmgr->fds[0].fd, buf, 1024))) {
+    if(0 < (ret = read(chmgr->fds[CTRL_MGR].fd, buf, 1024))) {
         buf[ret] =  '\0';
         lname = strtok(buf, " \n");
         rname = strtok(NULL, " \n");
@@ -281,8 +287,8 @@ static int mgr_process(struct chmgr *chmgr, int idx __unused)
 
         mgr_print(chmgr, "send %s to %s\n", lname, rname);
 
-        if(chmgr->ftq != NULL)
-            ftq_free(&chmgr->ftq);
+        if(chmgr->ftmgr != NULL)
+            free_ftmgr(&chmgr->ftmgr);
         if(0 > (ret = fstat_req(chmgr, lname, rname))) {
             mgr_print(chmgr, "send %s to %s: %s\n", lname, rname, strerror(errno));
         }
@@ -297,7 +303,7 @@ static void chmgr_sync_process(struct chmgr *chmgr)
     char buf[256];
     if(chmgr->heartbeat < 5) {
         n = snprintf(buf, 256, "\n\n\n%s -r %d\n", chmgr->server, chmgr->baudrate);
-        write(chmgr->fds[31].fd, buf, n);
+        write(chmgr->fds[CTRL_PHYSIAL].fd, buf, n);
         chmgr->heartbeat = 20;
     } else
 #endif
@@ -309,22 +315,22 @@ static void chmgr_sync_process(struct chmgr *chmgr)
 
 static int phys_open(struct chmgr *chmgr, const char *name)
 {
-    if(0 > (chmgr->fds[31].fd = open_serialport(name, chmgr->baudrate))) {
+    if(0 > (chmgr->fds[CTRL_PHYSIAL].fd = open_serialport(name, chmgr->baudrate))) {
         LOGE("open %s: %s\n", name, strerror(errno));
         return -1;
     }
 
-    if(0 > (chmgr->fds[0].fd = open_pty(chmgr->prefix, 0))) {
+    if(0 > (chmgr->fds[CTRL_MGR].fd = open_pty(chmgr->prefix, CTRL_MGR))) {
         LOGE("open_pty %s: %s\n", name, strerror(errno));
-        close(chmgr->fds[31].fd);
-        chmgr->fds[31].fd = 0;
+        close(chmgr->fds[CTRL_PHYSIAL].fd);
+        chmgr->fds[CTRL_PHYSIAL].fd = 0;
         return -1;
     }
 
-    chmgr->fds[31].events = POLLIN;
-    chmgr->fds[0].events = POLLIN;
-    chmgr->cbs[31] = phys_read;
-    chmgr->cbs[0]  = mgr_process;
+    chmgr->fds[CTRL_PHYSIAL].events = POLLIN;
+    chmgr->cbs[CTRL_PHYSIAL] = phys_read;
+    chmgr->fds[CTRL_MGR].events = POLLIN;
+    chmgr->cbs[CTRL_MGR]  = mgr_process;
     chmgr->slip = slip_create(SLIP_MTU, chmgr, (void(*)(void *, const uint8_t *, uint16_t))fm_handler, (void (*)(void *ctx, uint8_t))chmgr_putc);
     return 0;
 }
@@ -368,7 +374,7 @@ int main(int argc, char **argv)
                     chmgr.cbs[i](&chmgr, i);
                 }
                 if(((chmgr.fds[i].revents & POLLHUP) == POLLHUP)) {
-                    if(i == 31)
+                    if(i == CTRL_PHYSIAL)
                         goto __exit;
                     close_pty(chmgr.prefix, chmgr.fds[i].fd, i);
                     chmgr.fds[i].fd = open_pty(chmgr.prefix, i);
@@ -377,12 +383,8 @@ int main(int argc, char **argv)
 
         } else {
             chmgr_sync_process(&chmgr);
-        }
-
-        if(ftq_task_process(chmgr.ftq)) {
-            close_pty(chmgr.prefix, chmgr.fds[0].fd, 0);
-            chmgr.fds[0].fd = open_pty(chmgr.prefix, 0);
-            ftq_free(&chmgr.ftq);
+            if(chmgr.ftmgr)
+                ftmgr_timedout(chmgr.ftmgr);
         }
     }
 __exit:
@@ -390,7 +392,9 @@ __exit:
         if(chmgr.fds[i].fd > 0)
             close_pty(chmgr.prefix, chmgr.fds[i].fd, i);
     }
-    close(chmgr.fds[31].fd);
+    if(chmgr.ftmgr)
+        free_ftmgr(&chmgr.ftmgr);
+    close(chmgr.fds[CTRL_PHYSIAL].fd);
     return 0;
 __err:
     return -1;
