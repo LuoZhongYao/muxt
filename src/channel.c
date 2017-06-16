@@ -18,6 +18,7 @@
 #include "log.h"
 
 int loglevel = LOGLEVEL_ERROR | LOGLEVEL_WARNING;
+//int loglevel = 0xff;
 FILE *logfile = NULL;
 extern int open_serialport(const char *dev, int baudrate);
 extern void close_pty(const char *prefix, int fd, int idx);

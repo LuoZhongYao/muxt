@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <stdlib.h>
+#include <string.h>
 #include <fcntl.h>
 
 
@@ -24,10 +25,17 @@ __help:
     if(dev == NULL || in == NULL || out == NULL)
         goto __help;
 
+    memset(buf, 0, sizeof(buf));
+    if((*in != '/') && (*in != '~')) {
+        getcwd(buf, sizeof(buf));
+    }
+
+
+    n = strlen(buf);
+    n += snprintf(buf + n , sizeof(buf) - n, "/%s %s", in, out);
     fd = open(dev, O_RDWR);
-    n = snprintf(buf, 1024, "%s %s", in, out);
     write(fd, buf, n);
-    while(0 < (n = read(fd, buf, 1024))) {
+    while(0 < (n = read(fd, buf, sizeof(buf)))) {
         write(2, buf, n);
     }
     return 0;
